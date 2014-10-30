@@ -1,0 +1,131 @@
+	
+TOMCAT JDBC POOL 라이브러리 테스트
+
+
+
+테스트 정보
+- Apache Tomcat Server Version	: 6.0
+- TOMCAT JDBC Version			: 7.0.56
+- Mysql Driver Version			: 5.1.33
+- Oracle Driver Version			: 5.1.33
+- Mysql Server Info				: 5.1.41-community
+- Oracle Server Info			: Oracle Database 11g Release 11.2.0.3.0 - 64bit Production
+
+
+
+1. initialSize 옵션으로 시작시 각 Connection 갯수가 정상적으로 되는지 테스트 ( With "maxIdle, minIdle" Option Info )
+
+	● 테스트 방법
+		- 아래 테스트 설정 이 후 서버 재시작.
+
+	● MYSQL
+		- 10개 세팅시 정상적으로 10개의 세션이 붙는다.
+
+	● ORACLE
+		- 10개 세팅시 40개의 세션이 붙는다. 30개의 세션은 어떻게 사용되는 세션인지 알수가 없다.
+		- 실제로 웹에서 사용시 나머지 30개의 세션은 사용하지 않고 10개만 사용된다. 불필요한 세션이 만들어졌다고 볼 수 있다.
+		- 원인은 아직 불명확하다. (서버 상황에 따라 다른것으로 보임)
+
+	● Result
+		- initialSize 옵션은 사용부분에서 제외
+
+	● Etc
+		- maxIdle 옵션과 minIdle 옵션은 위 옵션과 같이 사용하지 않을 경우 사용할 이유가 없는것으로 보인다.
+		- 예를들어 실제 웹페이지에서 커넥을 진행 시에 Connection 후 close를 하지 않을 경우 대기중인 프로세스들 중 하나를 가져다 사용한다.
+		- 가져다 사용할 때에 close를 하지 않은 자원은 다시 대기상태(DB상의 대기상태가 아니라 해당 자원을 사용하는 프로세스의 대기상태)로 돌아가지 않고 계속 지속이 되거나
+		- 가비지 옵션을 켜놓았을경우 타임아웃에 따라 자원이 반환되어 버린다.
+		- close를 하지 않는 경우가 생기면 대기상태로 유지되지않고 자원이 반환되며 반환된 이후에는 다시 minIdle과 maxIdle의 갯수에 맞춰 동작하지 않는다. 
+		  ( 이 부분이 원래 그렇게 만든건지 잘못 설정한 것인지 의문이다. )
+		- close를 하게 되면 사용하던 자원을 다시 대기중으로 반납하여 대기중 상태로 진행된다.
+		- 사이트 전체가 완벽하게 close를 하게 된다면 효용성이 있는 부분이지만 close가 안되는 부분이 있다면 대기 프로세스 개수는 유지되지 않고 변경된다.
+		- 따라서 initialSize옵션과 minIdle, maxIdle 옵션은 함께 사용되지 않는 이상 큰 의미가 없다고 보여지기도 하고
+		- 오라클 부분에 initialSize 옵션에 대한 비정상적인 동작(원인을 알수 없는)이 나타나기 때문에 사용하지 않는것이 좋다고 보인다.
+		- 추가로 removeAbandoned 옵션이 설정 되어야 자원에 대한 이상 유무를 확인하고 자원이 반납된다.
+
+
+	● 테스트 설정
+	<Resource name="jdbc/TestDB"
+  		auth="Container"
+  		type="javax.sql.DataSource"
+		factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+  		driverClassName="oracle.jdbc.driver.OracleDriver"
+  		url="jdbc:oracle:thin:@127.0.0.1:1521:test"
+		maxActive="10"
+		initialSize="10"
+		maxIdle="7"
+		minIdle="5"
+  		username="test"
+  		password="test"
+  		
+		/>
+
+
+2. maxActive 옵션으로 설정한 값을 넘는지 테스트 
+
+	● 테스트 방법
+		- 아래 테스트 설정 이 후 서버 재시작.
+		- 하나의 웹페이지에서 Connection 이후 close를 하지 않게 설정하고 해당 페이지를 연속적으로 새로고침하여 다시 불러들임.
+
+	● MYSQL + ORACLE
+		- 10개 세팅시 정상적으로 10개까지만 프로세스 자원이 생성된다.
+
+	● Result
+		- 정상 동작.
+
+	● 테스트 설정
+	<Resource name="jdbc/TestDB"
+  		auth="Container"
+  		type="javax.sql.DataSource"
+		factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+  		driverClassName="oracle.jdbc.driver.OracleDriver"
+  		url="jdbc:oracle:thin:@127.0.0.1:1521:test"
+		initialSize="0"
+		maxActive="10"
+  		username="test"
+  		password="test"
+  		
+		/>
+
+
+3. removeAbandonedTimeout + timeBetweenEvictionRunsMillis + minEvictableIdleTimeMillis 옵션으로 설정한 값에 대한 유효성 체크
+
+	● 테스트 방법
+		- 아래 테스트 설정 이 후 서버 재시작.
+		- 하나의 웹페이지에서 Connection 이후 close를 하지 않게 설정하고 해당 페이지를 연속적으로 새로고침하여 다시 불러들임.
+		- 이 후 커넥이 끊어지는지 관찰
+	
+	● MYSQL + ORACLE Result
+		- removeAbandonedTimeout을 5로 timeBetweenEvictionRunsMillis 를 5000으로 minEvictableIdleTimeMillis를 10000 으로 설정 시 약 5~10초 사이에 커넥을 끊음(프로세스 자원 반환)
+		- removeAbandonedTimeout을 5로 timeBetweenEvictionRunsMillis 를 1000으로 minEvictableIdleTimeMillis를 5000 으로 설정 시 약 5~6초 사이에 커넥을 끊음(프로세스 자원 반환)
+		- 위 내용으로 봤을때 removeAbandonedTimeout 을 체크하는 시점과 timeBetweenEvictionRunsMillis를 체크하는 시점 그리고 minEvictableIdleTimeMillis를 설정한 시점을 기준으로 각각 반환되는 시간이 다르게 동작됨
+		- 빠른 자원 반환을 원한다면 timeBetweenEvictionRunsMillis를 1000(설정할 수 있는 최소값) 으로 설정 및 removeAbandonedTimeout 값을 작게 잡는것을 추천한다.
+		- removeAbandonedTimeout 시간을 기준으로 보통 웹 서비스는 큰 상관이 없으나 batch 작업 같은경우 커넥 이후 한동안 다른 작업을 진행할 수 있으므로 해당 프로퍼티 옵션은 batch작업시 따로 설정하여 작업하는것이 좋아 보인다.
+		- 헤비쿼리의 경우 jdbcInterceptors 설정으로 끊어지지 않게 설정 가능
+
+	● 테스트 설정
+
+	<Resource name="jdbc/TestDB"
+  		auth="Container"
+  		type="javax.sql.DataSource"
+		factory="org.apache.tomcat.jdbc.pool.DataSourceFactory"
+  		driverClassName="oracle.jdbc.driver.OracleDriver"
+  		url="jdbc:oracle:thin:@127.0.0.1:1521:test"
+		initialSize="0"
+		timeBetweenEvictionRunsMillis="1000" 
+		minEvictableIdleTimeMillis="5000"
+		removeAbandonedTimeout="5"
+		removeAbandoned="true"
+		logAbandoned="true"
+  		username="test"
+  		password="test"
+  		maxActive="10"
+  		maxIdle="5"
+		minIdle="5"
+  		maxWait="0"
+		
+		jmxEnabled="true"
+		jdbcInterceptors="org.apache.tomcat.jdbc.pool.interceptor.ConnectionState;
+			org.apache.tomcat.jdbc.pool.interceptor.StatementFinalizer"
+		/>
+
+
